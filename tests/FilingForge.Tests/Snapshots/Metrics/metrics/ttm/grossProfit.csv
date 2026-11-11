@@ -1,0 +1,5 @@
+ticker,periodEnd,provider,taxonomy,value,formula,sourceConcepts,filed,accession,sourceType,sourceDocument,sourceLabel,validationStatus,validationMessages
+FIX,2023-03-31,us-gaap,us-gaap,,BlankMissingInputs,,,,blank,,,ok,
+FIX,2023-06-30,us-gaap,us-gaap,,BlankMissingInputs,,,,blank,,,ok,
+FIX,2023-09-30,us-gaap,us-gaap,,BlankMissingInputs,,,,blank,,,ok,
+FIX,2023-12-31,us-gaap,us-gaap,8100,TtmSumQuarterly,GrossProfit|Revenues|CostOfGoodsAndServicesSold,2024-02-01,0000000001-24-000001|0000000001-23-000003|0000000001-23-000002|0000000001-23-000001,derived,,,ok,

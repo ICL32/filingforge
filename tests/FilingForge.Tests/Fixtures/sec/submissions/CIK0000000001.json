@@ -1,0 +1,12 @@
+{
+  "cik": "0000000001",
+  "name": "Fixture Corp",
+  "tickers": ["FIX"],
+  "filings": {
+    "recent": {
+      "accessionNumber": ["0000000001-24-000001"],
+      "filingDate": ["2024-02-01"],
+      "form": ["10-K"]
+    }
+  }
+}

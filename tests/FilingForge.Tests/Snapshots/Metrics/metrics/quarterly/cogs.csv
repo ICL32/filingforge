@@ -1,0 +1,5 @@
+ticker,periodEnd,provider,taxonomy,value,formula,sourceConcepts,filed,accession,sourceType,sourceDocument,sourceLabel,validationStatus,validationMessages
+FIX,2023-03-31,us-gaap,us-gaap,400,DirectFact,CostOfGoodsAndServicesSold,2023-05-01,0000000001-23-000001,companyfacts,,,ok,
+FIX,2023-06-30,us-gaap,us-gaap,800,DirectFact,CostOfGoodsAndServicesSold,2023-08-01,0000000001-23-000002,companyfacts,,,ok,
+FIX,2023-09-30,us-gaap,us-gaap,1200,RevenueMinusGrossProfit,Revenues|GrossProfit,2023-11-01,0000000001-23-000003,derived,,,ok,
+FIX,2023-12-31,us-gaap,us-gaap,,BlankMissingInputs,,,,blank,,,ok,
