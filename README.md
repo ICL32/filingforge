@@ -1,79 +1,151 @@
 # FilingForge
 
-FilingForge turns SEC EDGAR data into clean, comparable financial statements. You give it a ticker. It returns quarterly, annual and trailing-twelve-month (TTM) income statement, balance sheet and cash-flow figures. Every number records where it came from.
+[![CI](https://github.com/ICL32/filingforge/actions/workflows/ci.yml/badge.svg)](https://github.com/ICL32/filingforge/actions/workflows/ci.yml)
+![.NET 8](https://img.shields.io/badge/.NET-8.0-512BD4)
+![License: MIT](https://img.shields.io/badge/license-MIT-green)
 
-It is a plain .NET 8 library. It needs no database, cache server or API key, only an internet connection to `sec.gov`.
+**Clean quarterly, annual and TTM financial statements from SEC EDGAR. Every number shows where it came from.**
+
+FilingForge is a .NET 8 library. Give it a ticker and it gives back the income statement, balance sheet and cash-flow statement as consistent time series: 134 metrics, with standalone quarters, fiscal years and trailing twelve months. Each value records the formula, the SEC concepts and the filing it was built from.
+
+No API key, no database, no paid data vendor. The only input is public data from `sec.gov`.
+
+```text
+$ dotnet run --project samples/FilingForge.Samples -- statements AAPL
+AAPL: last 8 quarters (USD millions)
+Quarter       Revenue       Gross   Operating         Net         FCF
+Q1'25         124,300      58,275      42,832      36,330      26,995
+Q2'25          95,359      44,867      29,589      24,780      20,881
+Q3'25          94,036      43,718      28,202      23,434      24,405
+Q4'25         102,466      48,341      32,427      27,466      26,486
+Q1'26         143,756      69,231      50,852      42,097      51,552
+Q2'26         111,184      54,781      35,885      29,578      26,731
+Q3'26         109,417      54,770      35,695      29,789      31,914
+Q4'26         114,477      54,820      35,631      30,711      25,859
+```
+
+Apple never reports Q4 on its own: it files a 10-K for the full year. The Q4 rows above are rebuilt from the annual report and the three 10-Qs. FilingForge shows exactly how:
+
+```text
+$ dotnet run --project samples/FilingForge.Samples -- trace AAPL revenue
+Revenue, quarter ending 2026-09-26: 114,477M
+  formula     StandaloneQuarterFromAnnual
+  concepts    RevenueFromContractWithCustomerExcludingAssessedTax
+  filed       2026-11-03  accession 0000320193-26-000026
+  input       annual     2026-09-26      478,834M  filed 2026-11-03
+  input       q1         2025-12-27      143,756M  filed 2026-01-30
+  input       q2         2026-03-28      111,184M  filed 2026-05-01
+  input       q3         2026-06-27      109,417M  filed 2026-07-31
+```
 
 ## Why
 
-SEC's XBRL feed (`companyfacts`) is the best free source of US company financials, but it is hard to use as-is:
+SEC's XBRL data (`companyfacts`) is the best free source of company financials, but it is raw:
 
-- **Quarters are often missing.** Many companies only report Q4 inside the annual report, or report six- and nine-month year-to-date figures instead of the quarter. FilingForge rebuilds standalone quarters from those totals.
-- **Concepts change.** Revenue can move from one XBRL concept to another after an accounting change, and companies restate earlier periods. FilingForge merges the concepts and prefers the latest restated value. It also keeps the value as it was first reported, for point-in-time use.
-- **Some facts never reach the feed.** For filings where `companyfacts` has gaps, FilingForge reads the statement tables in the filing documents themselves (10-K, 10-Q, 20-F, 6-K exhibits).
-- **Averages are not sums.** Weighted-average share counts can't be added across quarters, so a missing Q4 is rebuilt by share-days, with stock splits taken into account.
+| Problem in the raw data | What FilingForge does |
+|---|---|
+| Q4 is only inside the 10-K; some filers only report 6- and 9-month totals | Rebuilds standalone quarters: Q2 = H1 − Q1, Q3 = 9M − H1, Q4 = FY − Q1 − Q2 − Q3 |
+| The same line moves between concepts (`Revenues` → `RevenueFromContractWithCustomer…`) | Merges concepts in filing order, so a later restatement replaces the stale figure |
+| Old periods get restated | Uses the latest value, and keeps the first-reported value and version history for point-in-time work |
+| Some facts never make it into `companyfacts` (foreign 6-K filers, odd cost lines) | Reads the statement tables in the filing documents themselves |
+| Weighted-average shares can't be added up | Rebuilds Q4 by share-days and adjusts for stock splits between the nine-month and annual figures |
+| Every company tags things differently | Each metric has a priority list of US GAAP / IFRS concepts and fallback formulas |
 
-## What you get
+## Install
 
-- About 240 metrics across the income statement, balance sheet and cash flow, from US GAAP and IFRS filers.
-- Quarterly, annual and TTM views of every flow metric. Point-in-time values for balance-sheet items.
-- EPS, weighted-average shares, and per-share versions of the main income-statement lines.
-- An audit row for every value: formula, source concepts, filing date, accession number and inputs.
-- Export to CSV, per-metric CSV files, XLSX, or a JSON-friendly trace.
+FilingForge isn't on NuGet yet. Reference the project directly:
 
-## Quick start
+```bash
+git clone https://github.com/ICL32/filingforge.git
+dotnet add <your-project>.csproj reference filingforge/src/FilingForge/FilingForge.csproj
+```
+
+## Use it
 
 ```csharp
 using FilingForge;
 
-// SEC asks automated clients to identify themselves with contact details.
+// SEC asks automated clients for a descriptive User-Agent with contact details.
 using var sec = new SecEdgarHttpSource("YourApp/1.0 you@example.com");
 var client = new FilingForgeClient(sec);
 
+// Income statement, balance sheet and cash-flow highlights per quarter and per year.
 var statements = await client.GetStatementsAsync("AAPL");
-var metrics    = await client.GetMetricsAsync("MSFT");   // rows + audit trail
-var revenue    = await client.GetRevenueAsync("NVDA");   // quarterly / annual / TTM revenue
 
+// Every metric for every period, plus an audit row per value.
+var metrics = await client.GetMetricsAsync("AAPL");
+foreach (var row in metrics.Rows)
+{
+    var quarter = row.Quarterly["revenue"].Value;   // standalone quarter
+    var ttm     = row.Ttm["revenue"].Value;         // trailing twelve months
+}
+
+// Quarterly / TTM revenue with year-over-year growth.
+var revenue = await client.GetRevenueAsync("MSFT");
+
+// Spreadsheet export: data sheet, audit sheets and metric definitions.
 var exporter = new FinancialMetricsExportService(client);
-File.WriteAllBytes("financials.xlsx", await exporter.BuildXlsxAsync(["AAPL", "MSFT"]));
+await File.WriteAllBytesAsync("financials.xlsx", await exporter.BuildXlsxAsync(["AAPL", "MSFT"]));
 ```
 
-`SecEdgarHttpSource` spaces requests to stay under SEC's limit of 10 requests per second, and keeps submissions in memory for the lifetime of the instance. To read from your own cache or a database instead, implement `ISecCompanyDataSource`, and optionally `ISecFilingDocumentSource` for the filing-document fallback.
+More in **[docs/usage.md](docs/usage.md)**: the result types, provenance fields, exports, and plugging in your own data source or cache.
 
-## How quarters are rebuilt
+## How it works
 
-| Missing | Rebuilt as |
-|---|---|
-| Q2 | six months − Q1 |
-| Q3 | nine months − six months, or nine months − Q1 − Q2 |
-| Q4 | year − Q1 − Q2 − Q3, or year − nine months |
-| Q4 weighted-average shares | (year avg × year days − 9M avg × 9M days) ÷ Q4 days |
+```mermaid
+flowchart LR
+    A[SEC companyfacts<br/>XBRL JSON] --> B[Read & merge concepts<br/>per metric]
+    F[Filing documents<br/>10-K / 10-Q / 20-F / 6-K] -->|only for gaps| B
+    B --> C[Align period ends<br/>52/53-week years]
+    C --> D[Rebuild standalone quarters<br/>Q2 · Q3 · Q4]
+    D --> E[Metrics engine<br/>fallback formulas · TTM · per-share]
+    E --> G[Rows + audit trail]
+    G --> H[Statements · Revenue · Fundamentals · CSV/XLSX]
+```
 
-Reconstruction uses the version of the annual figure that existed when the quarters were filed. A quarter is never rebuilt next to one that was reported directly.
+The full walkthrough, covering concept priority, restatements, quarter reconstruction, the filing-document fallback, TTM rules and validation, is in **[docs/how-it-works.md](docs/how-it-works.md)**.
 
-## Project layout
+## What's covered
+
+134 metrics (76 flow, 58 point-in-time), all listed in **[docs/metrics.md](docs/metrics.md)**:
+
+- **Income statement:** revenue, cost of revenue, gross profit, operating expenses, EBIT, pretax income, tax, net income, basic/diluted EPS, weighted-average shares, per-share lines.
+- **Cash flow:** operating cash flow, capex, free cash flow, buybacks, dividends, debt issuance and repayment, stock-based compensation, and more.
+- **Balance sheet:** cash and investments, receivables, inventory, assets, goodwill and intangibles, PP&E, debt and leases, liabilities, equity, shares outstanding.
+
+Works for US GAAP filers (10-K/10-Q) and IFRS foreign filers (20-F/40-F/6-K).
+
+## Repository layout
 
 ```
-src/FilingForge/
-  FilingForgeClient.cs        entry point
-  Sec/                        EDGAR access, companyfacts reader, filing statement parser
-  Financials/                 metric catalog, quarter/TTM builders, statements, fundamentals
+src/FilingForge/              the library
+  FilingForgeClient.cs        start here
+  Sec/                        SEC access, companyfacts reader, filing-document parser
+  Financials/                 metric catalog, quarter and TTM builders, statements
   Exporting/                  CSV / XLSX / trace export
-tests/FilingForge.Tests/      tests and snapshot fixtures
+samples/FilingForge.Samples/  runnable examples (statements, metric, trace, export)
+tests/FilingForge.Tests/      tests, fixture company, output snapshots
+docs/                         usage, how it works, metric reference
 ```
 
-## Running the tests
+## Development
 
 ```bash
 dotnet run --project tests/FilingForge.Tests -c Release
+FILINGFORGE_USER_AGENT="dev you@example.com" dotnet run --project samples/FilingForge.Samples -- statements MSFT
 ```
 
-Snapshot files live in `tests/FilingForge.Tests/Snapshots`. After an intended output change, set `UPDATE_SNAPSHOTS=1`, run the tests again, and review the diff.
+`tests/FilingForge.Tests/Snapshots` holds the full metric output for a fixture company. If you change the output on purpose, run the tests with `UPDATE_SNAPSHOTS=1` and review the diff. After changing the catalog, regenerate the metric reference with `dotnet run --project samples/FilingForge.Samples -- metrics-doc docs/metrics.md`.
 
-## Disclaimer
+## Limitations
 
-FilingForge reshapes public SEC data. It can be wrong where filings are inconsistent or unusual. It is not investment advice: check anything important against the original filing.
+- **TTM EPS is not split-adjusted.** Summing four quarters that span a stock split mixes the pre- and post-split share bases. Use TTM net income ÷ shares around splits.
+- Values read from filing documents (rather than XBRL) rely on table-parsing heuristics. They are labelled `filing-table` / `filing-text` in `SourceType` so you can filter them out.
+- A rebuilt diluted-share Q4 is approximate, because dilution is measured per period.
+- Data is only as good as the filings. Check anything important against the source document, whose accession number is on every value.
+
+FilingForge is not investment advice.
 
 ## License
 
-MIT. See [LICENSE](LICENSE).
+[MIT](LICENSE)
