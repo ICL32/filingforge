@@ -36,6 +36,9 @@ public sealed class SecEdgarHttpSource : ISecCompanyDataSource, ISecFilingDocume
     private IReadOnlyDictionary<string, string>? _tickerMap;
     private readonly ConcurrentDictionary<string, JsonDocument> _submissions = new(StringComparer.Ordinal);
 
+    // Filed documents never change, so each accession is downloaded at most once per instance.
+    private readonly ConcurrentDictionary<string, IReadOnlyList<SecFilingDocument>> _filingDocuments = new(StringComparer.OrdinalIgnoreCase);
+
     /// <param name="userAgent">
     /// Identifies the caller to SEC, for example <c>"MyApp/1.0 you@example.com"</c>.
     /// </param>
@@ -133,12 +136,30 @@ public sealed class SecEdgarHttpSource : ISecCompanyDataSource, ISecFilingDocume
 
         foreach (var filing in (await StatementFilingsAsync(ticker, ct)).Where(f => wanted.Contains(f.Accession!)))
         {
+            if (_filingDocuments.TryGetValue(filing.Accession!, out var known))
+            {
+                documents.AddRange(known);
+                continue;
+            }
+
             try
             {
-                var parts = await ReadSubmissionPackageAsync(cik, filing.Accession!, ct);
-                documents.AddRange(parts
-                    .Where(p => CarriesStatements(p.Type, p.Text))
-                    .Select(p => ToDocument(cik, sym, filing, p)));
+                List<SecFilingDocument> read;
+                // A 10-K/10-Q carries its statements in the primary document, which is far smaller
+                // than the complete submission. Other forms (6-K, 20-F...) often keep them in
+                // exhibits, so they, and any primary document without statements, use the package.
+                if (await PrimaryStatementDocumentAsync(cik, filing, ct) is { } primary)
+                {
+                    read = [ToDocument(cik, sym, filing, primary)];
+                }
+                else
+                {
+                    var parts = await ReadSubmissionPackageAsync(cik, filing.Accession!, ct);
+                    read = [.. parts.Where(p => CarriesStatements(p.Type, p.Text)).Select(p => ToDocument(cik, sym, filing, p))];
+                }
+
+                _filingDocuments[filing.Accession!] = read;
+                documents.AddRange(read);
             }
             catch (Exception ex) when (ex is HttpRequestException or IOException or TaskCanceledException && !ct.IsCancellationRequested)
             {
@@ -240,6 +261,22 @@ public sealed class SecEdgarHttpSource : ISecCompanyDataSource, ISecFilingDocume
     // ── Filing packages ─────────────────────────────────────────────────────────────────────
 
     private sealed record PackagePart(string? Type, string FileName, string Text);
+
+    private async Task<PackagePart?> PrimaryStatementDocumentAsync(string cik, LatestSubmissionFiling filing, CancellationToken ct)
+    {
+        if (!SecFormClassifier.IsDomesticPeriodicReport(filing.Form)
+            || filing.PrimaryDocument is not { Length: > 0 } primaryPath
+            || !IsHtml(primaryPath))
+            return null;
+
+        var fileName = Path.GetFileName(primaryPath);
+        using var response = await SendAsync(ArchiveUrl(cik, filing.Accession!, fileName), ct);
+        if (!response.IsSuccessStatusCode)
+            return null;
+
+        var html = await response.Content.ReadAsStringAsync(ct);
+        return CarriesStatements(filing.Form, html) ? new PackagePart(filing.Form, fileName, html) : null;
+    }
 
     /// <summary>
     /// Downloads the complete submission (<c>{accession}.txt</c>) and returns its HTML documents.
@@ -402,6 +439,7 @@ public sealed class SecEdgarHttpSource : ISecCompanyDataSource, ISecFilingDocume
         foreach (var doc in _submissions.Values)
             doc.Dispose();
         _submissions.Clear();
+        _filingDocuments.Clear();
         _gate.Dispose();
         if (_ownsClient)
             _http.Dispose();
